@@ -29,7 +29,7 @@ app.post("/save-profile", async (req, res) => {
   try {
     await pool.query(
       "INSERT INTO profiles (full_name, email, created_at) VALUES ($1, $2, now())",
-      [full_name, email, created_at]
+      [full_name, email]
     );
     res.json({ message: "Profile saved successfully." });
   } catch (err) {
@@ -62,7 +62,6 @@ const wss = new WebSocket.Server({ server });
 let highestBid = 0;
 let highestBidder = "";
 let clients = [];
-let bidHistory = fs.existsSync("bids.json") ? JSON.parse(fs.readFileSync("bids.json")) : [];
 
 wss.on("connection", (ws) => {
   clients.push(ws);
