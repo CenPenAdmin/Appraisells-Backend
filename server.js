@@ -67,12 +67,22 @@ let bidHistory = fs.existsSync("bids.json") ? JSON.parse(fs.readFileSync("bids.j
 wss.on("connection", (ws) => {
   clients.push(ws);
 
-  ws.send(JSON.stringify({
-    type: "init",
-    highest: highestBid,
-    user: highestBidder,
-    bids: bidHistory
-  }));
+    // Load bid history on client connect
+
+  ws.on("message", async (msg) => {  
+  try {
+    const result = await pool.query("SELECT user_name, amount, timestamp FROM bids ORDER BY timestamp DESC LIMIT 50");
+    ws.send(JSON.stringify({
+      type: "init",
+      highest: highestBid,
+      user: highestBidder,
+      bids: result.rows
+    }));
+  } catch (err) {
+    console.error("Failed to fetch bid history for websocket init:", err);
+    ws.send(JSON.stringify({ error: "Could not load bid history." }));
+  }
+});
 
   ws.on("message", (msg) => {
     try {
