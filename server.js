@@ -1,36 +1,55 @@
 const express = require("express");
-const fs = require("fs");
 const cors = require("cors");
 const WebSocket = require("ws");
-const app = express();
-const port = process.env.PORT || 
+const { Pool } = require("pg");
+const fs = require("fs");
 
+const app = express();
+const port = process.env.PORT || 3000;
+
+// === PostgreSQL Setup ===
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || "postgresql://postgres:Hot1Dry2@localhost:5432/appraisells_db",
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+});
+
+// === Middleware ===
 app.use(cors());
 app.use(express.json());
 
 // === Configuration ===
-const AUCTION_END = new Date("2025-12-31T23:59:59Z");  // Set real auction end time
-const MIN_INCREMENT = 0.1; // Minimum increment in Pi
+const AUCTION_END = new Date("2025-12-31T23:59:59Z");
+const MIN_INCREMENT = 0.1;
 
-// === Save profile info ===
-app.post("/save-profile", (req, res) => {
-  const data = req.body;
-  const profiles = fs.existsSync("profiles.json")
-    ? JSON.parse(fs.readFileSync("profiles.json"))
-    : [];
+// === Save profile info to PostgreSQL ===
+app.post("/save-profile", async (req, res) => {
+  const { full_name, email, wallet_address } = req.body;
+  const created_at = new Date();
 
-  profiles.push(data);
-  fs.writeFileSync("profiles.json", JSON.stringify(profiles, null, 2));
-  res.json({ message: "Profile saved successfully." });
+  try {
+    await pool.query(
+      "INSERT INTO profiles (full_name, email, created_at) VALUES ($1, $2, now())",
+      [full_name, email, created_at]
+    );
+    res.json({ message: "Profile saved successfully." });
+  } catch (err) {
+    console.error("Error saving profile:", err);
+    res.status(500).json({ message: "Failed to save profile." });
+  }
 });
 
-// === Return bid history ===
-app.get("/get-bids", (req, res) => {
-  const bids = fs.existsSync("bids.json")
-    ? JSON.parse(fs.readFileSync("bids.json"))
-    : [];
-  res.json(bids);
+// === Return bid history === 
+// === Return bid history from PostgreSQL ===
+app.get("/get-bids", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT user_name, amount, timestamp FROM bids ORDER BY timestamp DESC LIMIT 50");
+    res.json(result.rows);
+  } catch (err) {
+    console.error("Error fetching bids:", err);
+    res.status(500).json({ message: "Failed to fetch bids." });
+  }
 });
+
 
 // === Start server ===
 const server = app.listen(port, () => {
@@ -48,7 +67,6 @@ let bidHistory = fs.existsSync("bids.json") ? JSON.parse(fs.readFileSync("bids.j
 wss.on("connection", (ws) => {
   clients.push(ws);
 
-  // Send current auction state to new connection
   ws.send(JSON.stringify({
     type: "init",
     highest: highestBid,
@@ -86,8 +104,17 @@ wss.on("connection", (ws) => {
         timestamp: new Date().toISOString()
       };
 
-      bidHistory.push(bidData);
-      fs.writeFileSync("bids.json", JSON.stringify(bidHistory, null, 2));
+
+      ws.on("message", async (msg) => {
+            try {
+        await pool.query(
+          "INSERT INTO bids (user_name, amount, timestamp) VALUES ($1, $2, $3)",
+          [bidData.user, bidData.amount, bidData.timestamp]
+        );
+      } catch (err) {
+        console.error("Failed to store bid in PostgreSQL:", err);
+      }
+    });
 
       const broadcast = {
         type: "bid",
