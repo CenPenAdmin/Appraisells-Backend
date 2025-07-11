@@ -63,12 +63,10 @@ let highestBid = 0;
 let highestBidder = "";
 let clients = [];
 
-wss.on("connection", (ws) => {
+wss.on("connection", async (ws) => {
   clients.push(ws);
 
-    // Load bid history on client connect
-
-  ws.on("message", async (msg) => {  
+  // Send bid history on connection
   try {
     const result = await pool.query("SELECT user_name, amount, timestamp FROM bids ORDER BY timestamp DESC LIMIT 50");
     ws.send(JSON.stringify({
@@ -81,9 +79,8 @@ wss.on("connection", (ws) => {
     console.error("Failed to fetch bid history for websocket init:", err);
     ws.send(JSON.stringify({ error: "Could not load bid history." }));
   }
-});
 
-  ws.on("message", (msg) => {
+  ws.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
       const amount = parseFloat(data.amount);
@@ -113,9 +110,7 @@ wss.on("connection", (ws) => {
         timestamp: new Date().toISOString()
       };
 
-
-      ws.on("message", async (msg) => {
-            try {
+      try {
         await pool.query(
           "INSERT INTO bids (user_name, amount, timestamp) VALUES ($1, $2, $3)",
           [bidData.user, bidData.amount, bidData.timestamp]
@@ -123,7 +118,6 @@ wss.on("connection", (ws) => {
       } catch (err) {
         console.error("Failed to store bid in PostgreSQL:", err);
       }
-    });
 
       const broadcast = {
         type: "bid",
