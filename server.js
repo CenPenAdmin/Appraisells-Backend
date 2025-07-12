@@ -28,8 +28,8 @@ app.post("/save-profile", async (req, res) => {
 
   try {
     await pool.query(
-      "INSERT INTO profiles (full_name, email, created_at) VALUES ($1, $2, now())",
-      [full_name, email]
+      "INSERT INTO profiles (full_name, email, wallet_address, created_at) VALUES ($1, $2, $3, now())",
+      [full_name, email, wallet_address]
     );
     res.json({ message: "Profile saved successfully." });
   } catch (err) {
