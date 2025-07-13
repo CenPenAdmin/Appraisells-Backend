@@ -9,7 +9,7 @@ const port = process.env.PORT || 3000;
 
 // === PostgreSQL Setup ===
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || "postgresql://postgres:Hot1Dry2@localhost:5432/appraisells_db",
+  connectionString: process.env.DATABASE_URL ,
   ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
 });
 
