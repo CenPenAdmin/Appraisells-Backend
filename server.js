@@ -1,38 +1,47 @@
 const express = require("express");
 const cors = require("cors");
+const mongoose = require("mongoose");
 const WebSocket = require("ws");
-const { Pool } = require("pg");
-const fs = require("fs");
 
 const app = express();
 const port = process.env.PORT || 3000;
-
-
-
-// === PostgreSQL Setup ===
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL ,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
-});
 
 // === Middleware ===
 app.use(cors());
 app.use(express.json());
 
-// === Configuration ===
-const AUCTION_END = new Date("2025-12-31T23:59:59Z");
-const MIN_INCREMENT = 0.1;
+// === MongoDB Connection ===
+mongoose.connect("mongodb://localhost:27017/appraisells", {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log("✅ Connected to MongoDB");
+}).catch(err => {
+  console.error("❌ MongoDB connection error:", err);
+});
 
-// === Save profile info to PostgreSQL ===
+// === Mongoose Schemas ===
+const profileSchema = new mongoose.Schema({
+  full_name: String,
+  email: String,
+  wallet_address: String,
+  created_at: { type: Date, default: Date.now }
+});
+
+const bidSchema = new mongoose.Schema({
+  user_name: String,
+  amount: Number,
+  timestamp: { type: Date, default: Date.now }
+});
+
+const Profile = mongoose.model("Profile", profileSchema);
+const Bid = mongoose.model("Bid", bidSchema);
+
+// === Save profile info ===
 app.post("/save-profile", async (req, res) => {
-  const { full_name, email, wallet_address } = req.body;
-  const created_at = new Date();
-
   try {
-    await pool.query(
-      "INSERT INTO profiles (full_name, email, wallet_address, created_at) VALUES ($1, $2, $3, now())",
-      [full_name, email, wallet_address]
-    );
+    const profile = new Profile(req.body);
+    await profile.save();
     res.json({ message: "Profile saved successfully." });
   } catch (err) {
     console.error("Error saving profile:", err);
@@ -40,22 +49,20 @@ app.post("/save-profile", async (req, res) => {
   }
 });
 
-// === Return bid history === 
-// === Return bid history from PostgreSQL ===
+// === Return bid history ===
 app.get("/get-bids", async (req, res) => {
   try {
-    const result = await pool.query("SELECT user_name, amount, timestamp FROM bids ORDER BY timestamp DESC LIMIT 50");
-    res.json(result.rows);
+    const bids = await Bid.find().sort({ timestamp: -1 }).limit(50);
+    res.json(bids);
   } catch (err) {
     console.error("Error fetching bids:", err);
     res.status(500).json({ message: "Failed to fetch bids." });
   }
 });
 
-
-// === Start server ===
+// === Start HTTP server ===
 const server = app.listen(port, () => {
-  console.log(`🚀 Server running at http://localhost:${port}`);
+  console.log(`🚀 Server running on http://localhost:${port}`);
 });
 
 // === WebSocket Setup ===
@@ -64,21 +71,21 @@ const wss = new WebSocket.Server({ server });
 let highestBid = 0;
 let highestBidder = "";
 let clients = [];
+const AUCTION_END = new Date("2025-12-31T23:59:59Z");
+const MIN_INCREMENT = 0.1;
 
 wss.on("connection", async (ws) => {
   clients.push(ws);
 
-  // Send bid history on connection
   try {
-    const result = await pool.query("SELECT user_name, amount, timestamp FROM bids ORDER BY timestamp DESC LIMIT 50");
+    const recentBids = await Bid.find().sort({ timestamp: -1 }).limit(50);
     ws.send(JSON.stringify({
       type: "init",
       highest: highestBid,
       user: highestBidder,
-      bids: result.rows
+      bids: recentBids
     }));
   } catch (err) {
-    console.error("Failed to fetch bid history for websocket init:", err);
     ws.send(JSON.stringify({ error: "Could not load bid history." }));
   }
 
@@ -89,41 +96,26 @@ wss.on("connection", async (ws) => {
       const user = (data.user || "Anonymous").trim();
 
       if (new Date() > AUCTION_END) {
-        ws.send(JSON.stringify({ error: "Auction has ended. No more bids allowed." }));
+        ws.send(JSON.stringify({ error: "Auction has ended." }));
         return;
       }
 
-      if (!user || isNaN(amount)) {
-        ws.send(JSON.stringify({ error: "Invalid bid format." }));
-        return;
-      }
-
-      if (amount <= highestBid + MIN_INCREMENT - 0.000001) {
-        ws.send(JSON.stringify({ error: `Bid must be at least ${MIN_INCREMENT} Pi higher than current.` }));
+      if (!user || isNaN(amount) || amount <= highestBid + MIN_INCREMENT - 0.000001) {
+        ws.send(JSON.stringify({ error: `Bid must be at least ${MIN_INCREMENT} Pi higher.` }));
         return;
       }
 
       highestBid = amount;
       highestBidder = user;
 
-      const bidData = {
-        user: highestBidder,
-        amount: highestBid,
-        timestamp: new Date().toISOString()
-      };
-
-      try {
-        await pool.query(
-          "INSERT INTO bids (user_name, amount, timestamp) VALUES ($1, $2, $3)",
-          [bidData.user, bidData.amount, bidData.timestamp]
-        );
-      } catch (err) {
-        console.error("Failed to store bid in PostgreSQL:", err);
-      }
+      const newBid = new Bid({ user_name: user, amount });
+      await newBid.save();
 
       const broadcast = {
         type: "bid",
-        ...bidData
+        user,
+        amount,
+        timestamp: new Date().toISOString()
       };
 
       clients.forEach(client => {
@@ -131,10 +123,9 @@ wss.on("connection", async (ws) => {
           client.send(JSON.stringify(broadcast));
         }
       });
-
     } catch (err) {
-      console.error("Error handling message:", err);
-      ws.send(JSON.stringify({ error: "Server error. Invalid input." }));
+      console.error("WebSocket error:", err);
+      ws.send(JSON.stringify({ error: "Invalid input or server error." }));
     }
   });
 
